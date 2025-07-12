@@ -1,0 +1,151 @@
+\subsection{Multi-Head Latent Attention: Boosting Inference Efficiency}
+
+Conventional Transformer models usually adopts Multi-Head Attention~(MHA)~\citep{transformer}, but during generation, its heavy Key-Value~(KV) cache will become the bottleneck that limit the inference efficiency. 
+In order to reduce the KV cache, Multi-Query Attention~(MQA)~\citep{mqa} and Grouped-Query Attention~(GQA)~\citep{ainslie2023gqa} are proposed. 
+They require a smaller magnitude of KV cache, but their performance does not match MHA (we provide the ablation of MHA, GQA and MQA in Appendix~\ref{app:mha_gqa_mqa}).
+
+For \dsvii{}, we design an innovative attention mechanism called Multi-head Latent Attention (\dsattn{}). 
+Equipped with low-rank key-value joint compression, \dsattn{} achieves better performance than MHA, but requires a significantly smaller amount of KV cache. 
+We introduce its architecture in the following, and also provide a comparison between \dsattn{} and MHA in Appendix~\ref{app:dsattn_mha}. 
+
+\subsubsection{Preliminaries: Standard Multi-Head Attention}
+
+We first introduce the standard MHA mechanism as background. 
+Let $d$ be the embedding dimension, $n_h$ be the number of attention heads, $d_h$ be the dimension per head, and $\mathbf{h}_{t} \in \mathbb{R}^{d}$ be the attention input of the $t$-th token at an attention layer. 
+Standard MHA first produces $\mathbf{q}_{t}, \mathbf{k}_{t}, \mathbf{v}_{t} \in \mathbb{R}^{d_h n_h}$ through three matrices $W^{Q}, W^{K}, W^{V} \in \mathbb{R}^{d_h n_h \times d}$, respectively: 
+\begin{align}
+    \mathbf{q}_{t} &= W^{Q} \mathbf{h}_{t}, \\
+    \mathbf{k}_{t} &= W^{K} \mathbf{h}_{t}, \\
+    \mathbf{v}_{t} &= W^{V} \mathbf{h}_{t},
+\end{align}
+Then, $\mathbf{q}_{t}, \mathbf{k}_{t}, \mathbf{v}_{t}$ will be sliced into $n_h$ heads for the multi-head attention computation: 
+\begin{align}
+    [\mathbf{q}_{t, 1};&\mathbf{q}_{t, 2};...;\mathbf{q}_{t, n_{h}}] = \mathbf{q}_{t}, \\
+    [\mathbf{k}_{t, 1};&\mathbf{k}_{t, 2};...;\mathbf{k}_{t, n_{h}}] = \mathbf{k}_{t}, \\
+    [\mathbf{v}_{t, 1};&\mathbf{v}_{t, 2};...;\mathbf{v}_{t, n_{h}}] = \mathbf{v}_{t}, \\
+    \mathbf{o}_{t, i} &= \sum_{j=1}^{t} \operatorname{Softmax}_j(\frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_{h}}}) \mathbf{v}_{j, i}, \\ 
+    \mathbf{u}_{t} &= W^{O} [\mathbf{o}_{t, 1};\mathbf{o}_{t, 2};...;\mathbf{o}_{t, n_{h}}],
+\end{align}
+where $\mathbf{q}_{t, i}, \mathbf{k}_{t, i}, \mathbf{v}_{t, i} \in \mathbb{R}^{d_h}$ denote the query, key, and value of the $i$-th attention head, respectively; 
+$W^{O} \in \mathbb{R}^{d \times d_h n_h}$ denotes the output projection matrix. 
+During inference, all keys and values need to be cached to accelerate inference, so MHA needs to cache $2 n_{h} d_{h} l$ elements for each token. 
+In model deployment, this heavy KV cache is a large bottleneck that limits the maximum batch size and sequence length. 
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=0.99\linewidth]{figures/dsattn.pdf}
+\caption{
+Simplified illustration of Multi-Head Attention~(MHA), Grouped-Query Attention~(GQA), Multi-Query Attention~(MQA), and Multi-head Latent Attention~(\dsattn{}).  
+Through jointly compressing the keys and values into a latent vector, \dsattn{} significantly reduces the KV cache during inference. 
+}
+\label{fig:dsattn}
+\end{figure}
+
+\subsubsection{Low-Rank Key-Value Joint Compression}
+
+The core of \dsattn{} is the low-rank joint compression for keys and values to reduce KV cache:
+\begin{align}
+    \mathbf{c}_{t}^{KV} &= W^{DKV} \mathbf{h}_{t}, \\
+    \label{eq:c_to_k}
+    \mathbf{k}_{t}^{C} &= W^{UK} \mathbf{c}_{t}^{KV}, \\
+    \mathbf{v}_{t}^{C} &= W^{UV} \mathbf{c}_{t}^{KV},
+\end{align}
+where $\mathbf{c}_{t}^{KV} \in \mathbb{R}^{d_c}$ is the compressed latent vector for keys and values; 
+$d_c (\ll d_h n_h)$ denotes the KV compression dimension;
+$W^{DKV} \in \mathbb{R}^{d_c \times d}$ is the down-projection matrix;
+and $W^{UK},W^{UV} \in \mathbb{R}^{d_h n_h \times d_c}$ are the up-projection matrices for keys and values, respectively. 
+During inference, \dsattn{} only needs to cache $\mathbf{c}_{t}^{KV}$, so its KV cache has only $d_{c}l$ elements, where $l$ denotes the number of layers. 
+In addition, during inference, since $W^{UK}$ can be absorbed into $W^{Q}$, and $W^{UV}$ can be absorbed into $W^{O}$, we even do not need to compute keys and values out for attention. 
+Figure~\ref{fig:dsattn} intuitively illustrates how the KV joint compression in \dsattn{} reduces the KV cache. 
+
+Moreover, in order to reduce the activation memory during training, we also perform low-rank compression for the queries, even if it cannot reduce the KV cache:
+\begin{align}
+    \mathbf{c}_{t}^{Q} &= W^{DQ} \mathbf{h}_{t}, \\
+    \mathbf{q}_{t}^{C} &= W^{UQ} \mathbf{c}_{t}^{Q},
+\end{align}
+where $\mathbf{c}_{t}^{Q} \in \mathbb{R}^{d_c^{\prime}}$ is the compressed latent vector for queries; 
+$d_c^{\prime} (\ll d_h n_h)$ denotes the query compression dimension; 
+and $W^{DQ} \in \mathbb{R}^{d_c^{\prime} \times d}, W^{UQ} \in \mathbb{R}^{d_h n_h \times d_c^{\prime}}$ are the down-projection and up-projection matrices for queries, respectively. 
+
+\subsubsection{Decoupled Rotary Position Embedding}
+
+Following \dsvi{}~\citep{deepseek1}, we intend to use the Rotary Position Embedding~(RoPE)~\citep{su2024roformer} for \dsvii{}. 
+However, RoPE is incompatible with low-rank KV compression. 
+To be specific, RoPE is position-sensitive for both keys and queries. 
+If we apply RoPE for the keys $\mathbf{k}_{t}^{C}$, $W^{UK}$ in Equation~\ref{eq:c_to_k} will be coupled with a position-sensitive RoPE matrix. 
+In this way, $W^{UK}$ cannot be absorbed into $W^{Q}$ any more during inference, since a RoPE matrix related to the currently generating token will lie between $W^{Q}$ and $W^{UK}$ and matrix multiplication does not obey a commutative law. 
+As a result, we must recompute the keys for all the prefix tokens during inference, which will significantly hinder the inference efficiency. 
+
+As a solution, we propose the decoupled RoPE strategy that uses additional multi-head queries $\mathbf{q}_{t, i}^{R} \in \mathbb{R}^{d_h^R}$ and a shared key $\mathbf{k}_{t}^{R} \in \mathbb{R}^{d_h^R}$ to carry RoPE, where $d_h^R$ denotes the per-head dimension of the decoupled queries and key. 
+Equipped with the decoupled RoPE strategy, \dsattn{} performs the following computation:
+\begin{align}
+    [\mathbf{q}_{t, 1}^{R};\mathbf{q}_{t, 2}^{R};...;\mathbf{q}_{t, n_{h}}^{R}] = \mathbf{q}_{t}^{R} &= \operatorname{RoPE}({W^{QR}} \mathbf{c}_{t}^{Q}), \\
+    \mathbf{k}_{t}^{R} &= \operatorname{RoPE}({W^{KR}} \mathbf{h}_{t}), \\
+    \mathbf{q}_{t, i} &= [\mathbf{q}_{t, i}^{C}; \mathbf{q}_{t, i}^{R}], \\
+    \mathbf{k}_{t, i} &= [\mathbf{k}_{t, i}^{C}; \mathbf{k}_{t}^{R}], \\
+    \mathbf{o}_{t, i} &= \sum_{j=1}^{t} \operatorname{Softmax}_j(\frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_{h} + d_{h}^{R}}}) \mathbf{v}_{j, i}^{C}, \\ 
+    \mathbf{u}_{t} &= W^{O} [\mathbf{o}_{t, 1};\mathbf{o}_{t, 2};...;\mathbf{o}_{t, n_{h}}],
+\end{align}
+where $W^{QR} \in \mathbb{R}^{d_h^R n_h \times d_c^{\prime}}$ and $W^{KR} \in \mathbb{R}^{d_h^R \times d}$ are matrices to produce the decouples queries and key, respectively; 
+$\operatorname{RoPE}(\cdot)$ denotes the operation that applies RoPE matrices; 
+and $[\cdot;\cdot]$ denotes the concatenation operation. 
+During inference, the decoupled key should also be cached. 
+Therefore, \dsvii{} requires a total KV cache containing $(d_{c} + d_h^R)l$ elements. 
+
+In order to demonstrate the complete computation process of \dsattn{}, we also organize and provide its full formulas in Appendix~\ref{app:full_formulas}. 
+
+\begin{table}[!t]
+\centering
+\setlength{\tabcolsep}{12pt}
+\begin{tabular}{@{}l c c@{}}
+\toprule
+\textbf{Attention Mechanism} & \textbf{KV Cache per Token (\# Element)} & \textbf{Capability} \\
+\midrule
+Multi-Head Attention (MHA) & $2 n_{h} d_{h} l$ & Strong \\
+Grouped-Query Attention (GQA) & $2 n_{g} d_{h} l$ & Moderate \\
+Multi-Query Attention (MQA) & ~~~~$2 d_{h} l$ & Weak \\
+\midrule
+\dsattn{} (Ours) & $~~~~~~~~(d_{c} + d_h^R)l \approx \frac{9}{2} d_{h} l$~~~~~~~~~~~~~~~~~~~~~~~ & Stronger \\
+\bottomrule
+\end{tabular}
+\caption{
+Comparison of the KV cache per token among different attention mechanisms. 
+$n_{h}$ denotes the number of attention heads, 
+$d_{h}$ denotes the dimension per attention head, 
+$l$ denotes the number of layers, 
+$n_{g}$ denotes the number of groups in GQA, 
+and $d_{c}$ and $d_h^R$ denote the KV compression dimension and the per-head dimension of the decoupled queries and key in \dsattn{}, respectively. 
+The amount of KV cache is measured by the number of elements, regardless of the storage precision.
+For \dsvii{}, $d_{c}$ is set to $4d_{h}$ and $d_h^R$ is set to $\frac{d_{h}}{2}$. 
+So, its KV cache is equal to GQA with only 2.25 groups, but its performance is stronger than MHA. 
+}
+\label{tab:kv_cache_comp}
+\end{table}
+
+\subsubsection{Comparison of Key-Value Cache}
+
+We demonstrate a comparison of the KV cache per token among different attention mechanisms in Table~\ref{tab:kv_cache_comp}. 
+\dsattn{} requires only a small amount of KV cache, equal to GQA with only 2.25 groups, but can achieve stronger performance than MHA. 
+
+\subsection{Full Formulas of \dsattn{}}
+\label{app:full_formulas}
+
+In order to demonstrate the complete computation process of \dsattn{}, we provide its full formulas in the following: 
+\begin{align}
+    \mathbf{c}_{t}^{Q} &= W^{DQ} \mathbf{h}_{t}, \\
+    [\mathbf{q}_{t, 1}^{C};\mathbf{q}_{t, 2}^{C};...;\mathbf{q}_{t, n_{h}}^{C}] = \mathbf{q}_{t}^{C} &= W^{UQ} \mathbf{c}_{t}^{Q}, \\
+    [\mathbf{q}_{t, 1}^{R};\mathbf{q}_{t, 2}^{R};...;\mathbf{q}_{t, n_{h}}^{R}] = \mathbf{q}_{t}^{R} &= \operatorname{RoPE}({W^{QR}} \mathbf{c}_{t}^{Q}), \\
+    \mathbf{q}_{t, i} &= [\mathbf{q}_{t, i}^{C}; \mathbf{q}_{t, i}^{R}], \\
+    \boxed{\color{blue} \mathbf{c}_{t}^{KV}} &= W^{DKV} \mathbf{h}_{t}, \\
+    [\mathbf{k}_{t, 1}^{C};\mathbf{k}_{t, 2}^{C};...;\mathbf{k}_{t, n_{h}}^{C}] = \mathbf{k}_{t}^{C} &= W^{UK} \mathbf{c}_{t}^{KV}, \\
+    \boxed{\color{blue}\mathbf{k}_{t}^{R}} &= \operatorname{RoPE}({W^{KR}} \mathbf{h}_{t}), \\
+    \mathbf{k}_{t, i} &= [\mathbf{k}_{t, i}^{C}; \mathbf{k}_{t}^{R}], \\
+    [\mathbf{v}_{t, 1}^{C};\mathbf{v}_{t, 2}^{C};...;\mathbf{v}_{t, n_{h}}^{C}] = \mathbf{v}_{t}^{C} &= W^{UV} \mathbf{c}_{t}^{KV}, \\
+    \mathbf{o}_{t, i} &= \sum_{j=1}^{t} \operatorname{Softmax}_j(\frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_{h} + d_{h}^{R}}}) \mathbf{v}_{j, i}^{C}, \\
+    \mathbf{u}_{t} &= W^{O} [\mathbf{o}_{t, 1};\mathbf{o}_{t, 2};...;\mathbf{o}_{t, n_{h}}],
+\end{align}
+where the boxed vectors in blue need to be cached for generation. 
+During inference, the naive formula needs to recover $\mathbf{k}_{t}^{C}$ and $\mathbf{v}_{t}^{C}$ from $\mathbf{c}_{t}^{KV}$ for attention. 
+Fortunately, due to the associative law of matrix multiplication, we can absorb $W^{UK}$ into $W^{UQ}$, and $W^{UV}$ into $W^{O}$. 
+Therefore, we do not need to compute keys and values out for each query. 
+Through this optimization, we avoid the computational overhead for recomputing $\mathbf{k}_{t}^{C}$ and $\mathbf{v}_{t}^{C}$ during inference. 
