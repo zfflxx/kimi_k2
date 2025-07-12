@@ -5,6 +5,9 @@
 - 见[mla.tex](mla/mla.tex)
 - @mla.note.md @mla.tex 
 
+- 缓存与效果的极限拉扯：从MHA、MQA、GQA到MLA
+  - https://kexue.fm/archives/10091
+
 - 帮我概览总结一下MLA的设计
   - [MLA设计概览总结](mla/mla_design_overview.md)
 - 帮我详细解释Low-Rank Key-Value Joint Compression

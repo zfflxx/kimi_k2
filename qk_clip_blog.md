@@ -185,18 +185,4 @@ Muon与Adam训练的模型权重奇异值熵（等价于有效秩）比较
 
 本文提出了QK-Clip，它是MaxLogit爆炸问题的一种新思路，跟QK-Norm不同，它是对Q、K权重的一种事后调整方案，并不改变模型的前向计算，因此适用性更广，它是“Muon + MLA”组合在超大规模训练上的重要稳定策略，也是我们最新发布的万亿模型Kimi K2的关键技术之一。
 
-转载到请包括本文地址：https://kexue.fm/archives/11126
-
-更详细的转载事宜请参考：《科学空间FAQ》
-
-如果您需要引用本文，请参考：
-
-苏剑林. (Jul. 12, 2025). 《QK-Clip：让Muon在Scaleup之路上更进一步 》[Blog post]. Retrieved from https://kexue.fm/archives/11126
-
-@online{kexuefm-11126,
-            title={QK-Clip：让Muon在Scaleup之路上更进一步},
-            author={苏剑林},
-            year={2025},
-            month={Jul},
-            url={\url{https://kexue.fm/archives/11126}},
-}
+转载自：https://kexue.fm/archives/11126
