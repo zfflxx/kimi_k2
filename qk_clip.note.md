@@ -1,0 +1,26 @@
+### 来读在k2模型里使用的qk_clip
+
+- 介绍的博客见: @qk_clip_blog.md
+  - https://kexue.fm/archives/11126
+- 先帮我概览的读一下这篇博客
+  - [概览已完成，详见](qk_clip/qk_clip_overview.md)
+- 为什么MaxLogit会爆炸?
+  - [详细分析见](qk_clip/maxlogit_explosion_analysis.md)
+- 给我讲解一下softcap的原理, 以及其为什么没用?
+  - [详细分析见](qk_clip/softcap_analysis.md)
+- 为什么QK-Norm不适用于MLA?
+  - [详细分析见](qk_clip/qk_norm_mla_incompatibility.md)
+  - 如何理解物化（Materialize）?
+    - [详细解释见](qk_clip/materialize_concept.md)
+- 帮我理解奇异值裁剪, 为什么计算成本也不低?
+  - [详细分析见](qk_clip/svd_clipping_analysis.md)
+  - 为什么矩阵的谱范数等于其最大奇异值?
+    - [详细证明见](qk_clip/spectral_norm_proof.md)
+- 如何理解MaxLogit本身就是触发缩放的最直接信号, 然后详细解释初版QK-Clip的原理
+  - [详细分析见](qk_clip/maxlogit_direct_signal_analysis.md)
+- 帮我深入理解最终版的QK-Clip
+  - [详细分析见](qk_clip/final_qk_clip_analysis.md)
+- 你理解MLA吗?为什么QK有qr、qc、kr、kc四部分?
+  - [详细解析见](qk_clip/mla_architecture_analysis.md)
+- 帮我深入理解原因思考这一小节
+  - [深度理论分析见](qk_clip/muon_maxlogit_theory_analysis.md)
