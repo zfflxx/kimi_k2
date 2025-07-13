@@ -1,0 +1,171 @@
+# copy from: https://arxiv.org/abs/2412.19437
+
+\subsection{Basic Architecture}
+
+The basic architecture of \dsviii{} is still within the Transformer~\citep{transformer} framework. 
+For efficient inference and economical training, \dsviii{} also adopts \dsattn{} and \dsmoe{}, which have been thoroughly validated by \dsvii{}. 
+Compared with \dsvii{}, an exception is that we additionally introduce an auxiliary-loss-free load balancing strategy~\citep{noaux_tc} for \dsmoe{} to mitigate the performance degradation induced by the effort to ensure load balance. 
+Figure~\ref{fig:basic_arch} illustrates the basic architecture of \dsviii{}, and we will briefly review the details of MLA and DeepSeekMoE in this section. 
+
+\subsubsection{Multi-Head Latent Attention}
+
+For attention, \dsviii{} adopts the \dsattn{} architecture. 
+Let $d$ denote the embedding dimension, $n_h$ denote the number of attention heads, $d_h$ denote the dimension per head, and $\mathbf{h}_{t} \in \mathbb{R}^{d}$ denote the attention input for the $t$-th token at a given attention layer.
+The core of \dsattn{} is the low-rank joint compression for attention keys and values to reduce Key-Value (KV) cache during inference:
+\begin{align}
+    \boxed{\color{blue} \mathbf{c}_{t}^{KV}} &= W^{DKV} \mathbf{h}_{t}, \\
+    [\mathbf{k}_{t, 1}^{C};\mathbf{k}_{t, 2}^{C};...;\mathbf{k}_{t, n_{h}}^{C}] = \mathbf{k}_{t}^{C} &= W^{UK} \mathbf{c}_{t}^{KV}, \\
+    \boxed{\color{blue}\mathbf{k}_{t}^{R}} &= \operatorname{RoPE}({W^{KR}} \mathbf{h}_{t}), \\
+    \mathbf{k}_{t, i} &= [\mathbf{k}_{t, i}^{C}; \mathbf{k}_{t}^{R}], \\
+    [\mathbf{v}_{t, 1}^{C};\mathbf{v}_{t, 2}^{C};...;\mathbf{v}_{t, n_{h}}^{C}] = \mathbf{v}_{t}^{C} &= W^{UV} \mathbf{c}_{t}^{KV}, 
+\end{align}
+where $\mathbf{c}_{t}^{KV} \in \mathbb{R}^{d_c}$ is the compressed latent vector for keys and values; 
+$d_c (\ll d_h n_h)$ indicates the KV compression dimension;
+$W^{DKV} \in \mathbb{R}^{d_c \times d}$ denotes the down-projection matrix;
+$W^{UK},W^{UV} \in \mathbb{R}^{d_h n_h \times d_c}$ are the up-projection matrices for keys and values, respectively;
+$W^{KR} \in \mathbb{R}^{d_h^R \times d}$ is the matrix used to produce the decoupled key that carries Rotary Positional Embedding (RoPE)~\citep{su2024roformer}; 
+$\operatorname{RoPE}(\cdot)$ denotes the operation that applies RoPE matrices; 
+and $[\cdot;\cdot]$ denotes concatenation.
+Note that for MLA, only the blue-boxed vectors (i.e., $\color{blue} \mathbf{c}_{t}^{KV}$ and $\color{blue}\mathbf{k}_{t}^{R}$) need to be cached during generation, which results in significantly reduced KV cache while maintaining performance comparable to standard Multi-Head Attention (MHA)~\citep{transformer}.
+
+For the attention queries, we also perform a low-rank compression, which can reduce the activation memory during training:
+\begin{align}
+    \mathbf{c}_{t}^{Q} &= W^{DQ} \mathbf{h}_{t}, \\
+    [\mathbf{q}_{t, 1}^{C};\mathbf{q}_{t, 2}^{C};...;\mathbf{q}_{t, n_{h}}^{C}] = \mathbf{q}_{t}^{C} &= W^{UQ} \mathbf{c}_{t}^{Q}, \\
+    [\mathbf{q}_{t, 1}^{R};\mathbf{q}_{t, 2}^{R};...;\mathbf{q}_{t, n_{h}}^{R}] = \mathbf{q}_{t}^{R} &= \operatorname{RoPE}({W^{QR}} \mathbf{c}_{t}^{Q}), \\
+    \mathbf{q}_{t, i} &= [\mathbf{q}_{t, i}^{C}; \mathbf{q}_{t, i}^{R}],
+\end{align}
+where $\mathbf{c}_{t}^{Q} \in \mathbb{R}^{d_c^{\prime}}$ is the compressed latent vector for queries; 
+$d_c^{\prime} (\ll d_h n_h)$ denotes the query compression dimension; 
+$W^{DQ} \in \mathbb{R}^{d_c^{\prime} \times d}, W^{UQ} \in \mathbb{R}^{d_h n_h \times d_c^{\prime}}$ are the down-projection and up-projection matrices for queries, respectively;
+and $W^{QR} \in \mathbb{R}^{d_h^R n_h \times d_c^{\prime}}$ is the matrix to produce the decoupled queries that carry RoPE. 
+
+Ultimately, the attention queries ($\mathbf{q}_{t, i}$), keys ($\mathbf{k}_{j, i}$), and values ($\mathbf{v}_{j, i}^{C}$) are combined to yield the final attention output $\mathbf{u}_{t}$:
+\begin{align}
+    \mathbf{o}_{t, i} &= \sum_{j=1}^{t} \operatorname{Softmax}_j(\frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_{h} + d_{h}^{R}}}) \mathbf{v}_{j, i}^{C}, \\
+    \mathbf{u}_{t} &= W^{O} [\mathbf{o}_{t, 1};\mathbf{o}_{t, 2};...;\mathbf{o}_{t, n_{h}}],
+\end{align}
+where $W^{O} \in \mathbb{R}^{d \times d_h n_h}$ denotes the output projection matrix. 
+
+\subsubsection{\dsmoe{} with Auxiliary-Loss-Free Load Balancing}
+
+\paragraph{Basic Architecture of \dsmoe{}.}
+For Feed-Forward Networks~(FFNs), \dsviii{} employs the \dsmoe{} architecture~\citep{deepseekmoe}. 
+Compared with traditional MoE architectures like GShard~\citep{gshard}, \dsmoe{} uses finer-grained experts and isolates some experts as shared ones.
+Let $\mathbf{u}_{t}$ denote the FFN input of the $t$-th token, we compute the FFN output $\mathbf{h}_{t}^{\prime}$ as follows:
+\begin{align}
+    \mathbf{h}_{t}^{\prime} & = \mathbf{u}_{t} + \sum_{i=1}^{N_{s}} {\operatorname{FFN}^{(s)}_{i}\left( \mathbf{u}_{t} \right)} + \sum_{i=1}^{N_r} {g_{i,t} \operatorname{FFN}^{(r)}_{i}\left( \mathbf{u}_{t} \right)}, \\
+    g_{i,t} & = \frac{g^{\prime}_{i,t}}{\sum_{j=1}^{N_r} g^{\prime}_{j,t}}, \\
+    g^{\prime}_{i,t} & = \begin{cases} 
+    s_{i,t}, & s_{i,t} \in \operatorname{Topk} (\{ s_{j, t} | 1 \leq j \leq N_r \}, K_{r}), \\
+    0, & \text{otherwise}, 
+    \end{cases} \\
+    s_{i,t} & = \operatorname{Sigmoid} \left( {\mathbf{u}_{t}}^{T} \mathbf{e}_{i} \right),
+\end{align}
+where $N_{s}$ and $N_r$ denote the numbers of shared experts and routed experts, respectively; 
+$\operatorname{FFN}^{(s)}_{i}(\cdot)$ and $\operatorname{FFN}^{(r)}_{i}(\cdot)$ denote the $i$-th shared expert and the $i$-th routed expert, respectively; 
+$K_{r}$ denotes the number of activated routed experts; 
+$g_{i,t}$ is the gating value for the $i$-th expert; 
+$s_{i,t}$ is the token-to-expert affinity; 
+$\mathbf{e}_{i}$ is the centroid vector of the $i$-th routed expert; 
+and $\operatorname{Topk}(\cdot, K)$ denotes the set comprising $K$ highest scores among the affinity scores calculated for the $t$-th token and all routed experts.
+Slightly different from \dsvii{}, \dsviii{} uses the sigmoid function to compute the affinity scores, and applies a normalization among all selected affinity scores to produce the gating values. 
+
+\paragraph{Auxiliary-Loss-Free Load Balancing.}
+For MoE models, an unbalanced expert load will lead to routing collapse~\citep{moe} and diminish computational efficiency in scenarios with expert parallelism. 
+Conventional solutions usually rely on the auxiliary loss~\citep{switch,gshard} to avoid unbalanced load. 
+However, too large an auxiliary loss will impair the model performance~\citep{noaux_tc}. 
+To achieve a better trade-off between load balance and model performance, we pioneer an auxiliary-loss-free load balancing strategy~\citep{noaux_tc} to ensure load balance. 
+To be specific, we introduce a bias term $b_i$ for each expert and add it to the corresponding affinity scores $s_{i,t}$ to determine the top-K routing:
+\begin{align}
+    g^{\prime}_{i,t} & = \begin{cases} 
+    s_{i,t}, & s_{i,t} + b_i \in \operatorname{Topk} (\{ s_{j, t} + b_j | 1 \leq j \leq N_r \}, K_{r}), \\
+    0, & \text{otherwise}.
+    \end{cases}
+\end{align}
+Note that the bias term is only used for routing.
+The gating value, which will be multiplied with the FFN output, is still derived from the original affinity score $s_{i,t}$.
+During training, we keep monitoring the expert load on the whole batch of each training step.
+At the end of each step, we will decrease the bias term by $\gamma$ if its corresponding expert is overloaded, and increase it by $\gamma$ if its corresponding expert is underloaded, where $\gamma$ is a hyper-parameter called bias update speed.
+Through the dynamic adjustment, \dsviii{} keeps balanced expert load during training, and achieves better performance than models that encourage load balance through pure auxiliary losses.
+
+\paragraph{Complementary Sequence-Wise Auxiliary Loss.}
+Although \dsviii{} mainly relies on the auxiliary-loss-free strategy for load balance, to prevent extreme imbalance within any single sequence, we also employ a complementary sequence-wise balance loss:
+\begin{align}
+    \mathcal{L}_{\mathrm{Bal}} & = \alpha \sum_{i=1}^{N_r}{f_i P_i}, \\
+    % f_i = \frac{N_r}{K_r T} \sum_{t=1}^{T} \mathds{1}( \text{Expert $i$ } & \text{belongs to the Top-$K_r$ set for Token $t$} ), \\
+    f_i &= \frac{N_r}{K_r T} \sum_{t=1}^{T} \mathds{1} \left( s_{i,t} \in \operatorname{Topk} ( \{ s_{j, t} | 1 \leq j \leq N_r \}, K_{r} ) \right), \\
+    s^{\prime}_{i,t} & = \frac{s_{i,t}}{\sum_{j=1}^{N_r} s_{j,t}}, \\
+    P_i & = \frac{1}{T} \sum_{t=1}^{T}{s^{\prime}_{i,t}},
+\end{align}
+where the balance factor $\alpha$ is a hyper-parameter, which will be assigned an extremely small value for \dsviii{}; 
+$\mathds{1}(\cdot)$ denotes the indicator function; 
+and $T$ denotes the number of tokens in a sequence. 
+The sequence-wise balance loss encourages the expert load on each sequence to be balanced. 
+
+\paragraph{Node-Limited Routing.}
+Like the device-limited routing used by \dsvii{}, \dsviii{} also uses a restricted routing mechanism to limit communication costs during training. 
+In short, we ensure that each token will be sent to at most $M$ nodes, which are selected according to the sum of the highest $\frac{K_r}{M}$ affinity scores of the experts distributed on each node.
+Under this constraint, our MoE training framework can nearly achieve full computation-communication overlap. 
+
+\paragraph{No Token-Dropping.}
+Due to the effective load balancing strategy, \dsviii{} keeps a good load balance during its full training. 
+Therefore, \dsviii{} does not drop any tokens during training. 
+In addition, we also implement specific deployment strategies to ensure inference load balance, so \dsviii{} also does not drop tokens during inference. 
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=0.99\linewidth]{figures/nextn.pdf}
+\caption{
+    Illustration of our Multi-Token Prediction (MTP) implementation. 
+    We keep the complete causal chain for the prediction of each token at each depth. 
+}
+\label{fig:nextn}
+\end{figure}
+
+\subsection{Multi-Token Prediction}
+
+Inspired by \citet{meta_mtp}, we investigate and set a Multi-Token Prediction (MTP) objective for \dsviii{}, which extends the prediction scope to multiple future tokens at each position.
+On the one hand, an MTP objective densifies the training signals and may improve data efficiency.
+On the other hand, MTP may enable the model to pre-plan its representations for better prediction of future tokens.
+Figure~\ref{fig:nextn} illustrates our implementation of MTP.
+Different from \citet{meta_mtp}, which parallelly predicts $D$ additional tokens using independent output heads, we sequentially predict additional tokens and keep the complete causal chain at each prediction depth.
+We introduce the details of our MTP implementation in this section.
+
+\paragraph{MTP Modules.}
+To be specific, our MTP implementation uses $D$ sequential modules to predict $D$ additional tokens. 
+The $k$-th MTP module consists of a shared embedding layer $\operatorname{Emb}(\cdot)$, a shared output head $\operatorname{OutHead}(\cdot)$, a Transformer block $\operatorname{TRM}_k(\cdot)$, and a projection matrix $M_k \in \mathbb{R}^{d \times 2d}$. 
+For the $i$-th input token $t_i$, at the $k$-th prediction depth, we first combine the representation of the $i$-th token at the $(k-1)$-th depth $\mathbf{h}_i^{k-1} \in \mathbb{R}^{d}$ and the embedding of the $(i+k)$-th token $Emb(t_{i+k}) \in \mathbb{R}^{d}$ with the linear projection: 
+\begin{equation}
+    \mathbf{h}_i^{\prime k} = M_k [\operatorname{RMSNorm}(\mathbf{h}_i^{k-1}) ; \operatorname{RMSNorm}(\operatorname{Emb}(t_{i+k}))],
+\end{equation}
+where $[\cdot ; \cdot]$ denotes concatenation. 
+Especially, when $k=1$, $\mathbf{h}_i^{k-1}$ refers to the representation given by the main model.
+Note that for each MTP module, its embedding layer is shared with the main model. 
+The combined $\mathbf{h}_i^{\prime k}$ serves as the input of the Transformer block at the $k$-th depth to produce the output representation at the current depth $\mathbf{h}_{i}^{k}$:
+\begin{equation}
+    \mathbf{h}_{1:T-k}^{k} = \operatorname{TRM}_k(\mathbf{h}_{1:T-k}^{\prime k}),
+\end{equation}
+where $T$ represents the input sequence length and $_{i:j}$ denotes the slicing operation (inclusive of both the left and right boundaries). 
+Finally, taking $\mathbf{h}_{i}^{k}$ as the input, the shared output head will compute the probability distribution for the $k$-th additional prediction token $P_{i+1+k}^{k} \in \mathbb{R}^{V}$, where $V$ is the vocabulary size:
+\begin{equation}
+    P_{i+k+1}^{k} = \operatorname{OutHead}(\mathbf{h}_{i}^{k}).
+\end{equation}
+The output head $\operatorname{OutHead}(\cdot)$ linearly maps the representation to logits and subsequently applies the $\operatorname{Softmax}(\cdot)$ function to compute the prediction probabilities of the $k$-th additional token. 
+Also, for each MTP module, its output head is shared with the main model. 
+Our principle of maintaining the causal chain of predictions is similar to that of EAGLE~\citep{eagle}, but its primary objective is speculative decoding~\citep{speculative_xhm,speculative_google}, whereas we utilize MTP to improve training.
+
+\paragraph{MTP Training Objective.}
+For each prediction depth, we compute a cross-entropy loss $\mathcal{L}_{\text{MTP}}^{k}$:
+\begin{equation}
+    \mathcal{L}_{\text{MTP}}^{k} = \operatorname{CrossEntropy}(P_{2 + k:T + 1}^{k}, t_{2 + k:T + 1}) = -\frac{1}{T} \sum_{i=2 + k}^{T + 1} \log P_i^k [t_i],
+\end{equation}
+where $T$ denotes the input sequence length, $t_i$ denotes the ground-truth token at the $i$-th position, and $P_i^k [t_i]$ denotes the corresponding prediction probability of $t_i$, given by the $k$-th MTP module. 
+Finally, we compute the average of the MTP losses across all depths and multiply it by a weighting factor $\lambda$ to obtain the overall MTP loss $\mathcal{L}_{\text{MTP}}$, which serves as an additional training objective for \dsviii{}:
+\begin{equation}
+    \mathcal{L}_{\text{MTP}} = \frac{\lambda}{D} \sum_{k=1}^{D} \mathcal{L}_{\text{MTP}}^{k}.
+\end{equation}
+
+\paragraph{MTP in Inference.}
+Our MTP strategy mainly aims to improve the performance of the main model, so during inference, we can directly discard the MTP modules and the main model can function independently and normally.
+Additionally, we can also repurpose these MTP modules for speculative decoding to further improve the generation latency.
