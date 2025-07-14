@@ -42,3 +42,16 @@
   - [Expert Choice中未来Token泄露的深入理解](auxiliary-loss-free/future-token-leakage-expert-choice-explanation.md)
 - 帮我深入理解Loss-Free Balancing Is Compatible with Expert Parallelism
   - [Loss-Free负载均衡与专家并行兼容性的深入理解](auxiliary-loss-free/loss-free-expert-parallelism-compatibility.md)
+
+### 读苏剑林的博客
+- @auxiliary-loss-free.tex @auxiliary-loss-free.note.md @aux_loss_su_blog.md
+- 我当前有一个疑惑, 这个偏置b在论文中不是根据当前负载算出来的吗, 为啥在这个博客中还手搓梯度, 说明还使用梯度下降来更新b, 到底是怎么回事?
+  - [偏置参数 $b_i$ 的梯度更新机制解释](auxiliary-loss-free/bias-parameter-gradient-explanation.md)
+  - 帮我深入理解符号梯度下降
+    - [符号梯度下降 (SignSGD) 深入理解](auxiliary-loss-free/sign-gradient-descent-explanation.md)
+  - 我能否理解这里的梯度下降的解读为: 优化目标是均匀分布, 优化器是+1/-1/0, 学习率是0.001, 而这个F来源于专家的实际负载而并不是来源于训练的数据, 从这些视角来看等价于梯度下降但是又和其他参数的梯度下降不同?
+    - [偏置参数梯度下降的独特性解读](auxiliary-loss-free/gradient-descent-interpretation-comparison.md)
+- 本来讨论的是Expert Choice有未来token泄露的问题, 但是为什么博客中说LM Loss也会有信息泄漏的问题, 在博客中有提到如何规避吗?
+  - [LM Loss 中的信息泄露问题分析](auxiliary-loss-free/lm-loss-information-leakage-analysis.md)
+- 帮我深入理解延伸思考这一小节
+  - [延伸思考：Loss-Free的数学本质与普适性分析](auxiliary-loss-free/extended-thinking-analysis.md)
