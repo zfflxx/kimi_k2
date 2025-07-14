@@ -1,0 +1,763 @@
+% copy from: https://arxiv.org/abs/2408.15664
+
+
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2024_conference,times}
+
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+
+\usepackage{hyperref}
+\usepackage{url}
+
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{bbm}
+
+\usepackage{makecell}
+
+\usepackage{multirow}
+
+% \usepackage{svg}
+
+\usepackage{graphicx}
+
+\usepackage[T1]{fontenc}
+\usepackage{fontsize}
+\usepackage{xcolor,soul}
+\usepackage{color}
+
+\usepackage{booktabs}
+
+\usepackage[ruled]{algorithm2e}
+
+\newcommand{\rotbox}[1]{\rotatebox{70}{#1}}
+\usepackage{ifthen}
+\newboolean{showcomments}
+\setboolean{showcomments}{true} % set to false to check the page limit
+\newcommand{\lean}[1]{\textcolor{brown}{\bf \small[#1 - wang]}}{}
+% \newcommand{\lean}[1]{\ifthenelse{\boolean{showcomments}}{\textcolor{brown}{\bf \small[#1 - wang]}}{}}
+
+% \title{Exploring Auxiliary-Loss-Free Load Balancing Techniques for Mixture-of-Experts Models}
+
+\definecolor{ddmred}{RGB}{220, 90, 90} % 温和红色
+\definecolor{ddmgreen}{RGB}{0, 168, 107} % 温和绿色
+
+\makeatletter
+\newcommand{\thanksA}[1]{%
+  \footnotemark
+  \protected@xdef\@thanks{\@thanks\protect\footnotetext[1]{#1}}%
+}
+\newcommand{\thanksB}[1]{%
+  \footnotemark[2]
+  \protected@xdef\@thanks{\@thanks\protect\footnotetext[2]{#1}}%
+}
+\long\def\@makefnmark{%
+    \hbox{\@textsuperscript{\normalfont\@thefnmark}}}
+\def\@fnsymbol#1{\ensuremath{\ifcase#1\or *\or \diamond\or \ddagger\or
+   \mathsection\or \mathparagraph\or \|\or **\or \dagger\dagger
+   \or \ddagger\ddagger \else\@ctrerr\fi}}
+\makeatother
+
+\title{Auxiliary-Loss-Free Load Balancing 
+Strategy for Mixture-of-Experts}
+
+% Authors must not appear in the submitted version. They should be hidden
+% as long as the \iclrfinalcopy macro remains commented out below.
+% Non-anonymous submissions will be rejected without review.
+
+\author{Lean Wang$^{1,2}$\thanksA{~Contribution during internship at DeepSeek-AI.}~~, Huazuo Gao$^{1}$, Chenggang Zhao$^{1}$, Xu Sun$^{2}$\footnotemark[2]~, Damai Dai$^{1}$\thanksB{~Corresponding author.}\\
+\textsuperscript{1}{DeepSeek-AI}\\
+\textsuperscript{2}{State Key Laboratory of Multimedia Information Processing,}\\ {School of Computer Science, Peking University}\\
+\texttt{{lean@pku.edu.cn, xusun@pku.edu.cn, damai.dai@deepseek.com}}
+% \texttt{\{lean, gaohuazuo, chenggangz, damai.dai\}@deepseek.com} \\
+% \texttt{\{lean, xusun\}@pku.edu.cn}
+}
+% \And
+% Ji Q. Ren \& Yevgeny LeNet \\
+% Department of Computational Neuroscience \\
+% University of the Witwatersrand \\
+% Joburg, South Africa \\
+% \texttt{\{robot,net\}@wits.ac.za} \\
+% \AND
+% Coauthor \\
+% Affiliation \\
+% Address \\
+% \texttt{email}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to \LaTeX{} to determine where to break
+% the lines. Using \AND forces a linebreak at that point. So, if \LaTeX{}
+% puts 3 of 4 authors names on the first line, and the last on the second
+% line, try using \AND instead of \And before the third author name.
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+\newcommand{\ours}{Loss-Free Balancing}
+\newcommand{\Ours}{Loss-Free Balancing}
+\newcommand{\OURS}{Loss-Free Balancing}
+
+% \iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+
+% LB BG
+For Mixture-of-Experts~(MoE) models, an unbalanced expert load will lead to routing collapse or increased computational overhead. 
+% aux loss and shortcoming
+Existing methods commonly employ an auxiliary loss to encourage load balance, but a large auxiliary loss will introduce non-negligible interference gradients into training and thus impair the model performance. 
+% ours
+In order to control load balance while not producing undesired gradients during training, we propose \textbf{\ours{}}, featured by an auxiliary-loss-free load balancing strategy. 
+% short method & advantage
+To be specific, before the top-K routing decision, \ours{} will first apply an expert-wise bias to the routing scores of each expert.
+By dynamically updating the bias of each expert according to its recent load, \ours{} can consistently maintain a balanced distribution of expert load.
+In addition, since \ours{} does not produce any interference gradients, it also elevates the upper bound of model performance gained from MoE training.
+% experiments
+% We validate the performance of \ours{} on xxx. 
+We validate the performance of \ours{} on MoE models with up to 3B parameters trained on up to 200B tokens.
+Experimental results show that \ours{} achieves both better performance and better load balance compared with traditional auxiliary-loss-controlled load balancing strategies. 
+
+% Mixture-of-Experts~(MoE) models commonly employ an auxiliary loss to maintain load balance, preventing routing collapse and significant computational bottlenecks. However, this auxiliary loss introduces additional gradients during training, potentially impairing model performance and creating a trade-off between load balance and performance. To address this issue, we propose \textbf{\ours{}}, a non-auxiliary-loss method that selects experts using a 'biased gating score' and updates the per-expert bias after each training step like a feedback controller (FBC). \ours{} eliminates the need for an auxiliary loss, improving the performance and load balance of MoE models.
+
+\end{abstract}
+
+
+\section{Introduction}
+Mixture-of-Experts~(MoE) architectures have emerged as a promising solution for managing computational costs when scaling up parameters in large language models~(LLMs). 
+Recent applications of MoE in Transformer-based models~\citep{Vaswani2017AttentionIA} have led to successful attempts at scaling language models to substantial sizes \citep{Shao2024DeepSeekV2AS,DeepSeekAI2024DeepSeekCoderV2BT,Dai2024DeepSeekMoETU,Fedus2021SwitchTS,Lepikhin2020GShardSG}, resulting in remarkable performance improvements. 
+However, training MoE models always face the circumstance of load imbalance, which may result in routing collapse~\citep{Shazeer2017OutrageouslyLN} or increased computational overhead~\citep{Fedus2021SwitchTS,Lepikhin2020GShardSG,Shazeer2017OutrageouslyLN}. 
+In order to avoid imbalanced routing, existing methods~\citep{Fedus2021SwitchTS,Lepikhin2020GShardSG} commonly use an auxiliary loss to encourage balanced expert load.
+Although the auxiliary loss can alleviate load imbalance during training, it also introduces undesired gradients that conflict with the language modeling objective. 
+These interference gradients will impair the model performance, so existing MoE methods always need to consider the trade-off between load balance and model performance. 
+
+In this paper, we propose \textbf{\ours{}}, an auxiliary-loss-free load balancing strategy, aiming at maintaining control over expert load balance while not introducing interference gradients. 
+\Ours{} features an iterative process of token routing and bias updating. 
+As illustrated in Figure~\ref{fig:figure.pdf}, before the top-K routing decision of MoE, \ours{} will first apply expert-wise biases to the original routing scores to produce biased gating scores, which determine the actual routing targets of each token during training. 
+These expert-wise biases will keep updating according to the expert load observed on recent training tokens, where the biases of heavy-load experts will be depressed and those of lite-load experts will be elevated. 
+Through this dynamic updating strategy, \ours{} ensures that the biased gating scores can consistently lead to balanced routing results. 
+Compared with the auxiliary-loss-controlled load balancing strategies, \ours{} does not introduce undesired gradients that disrupt the primary language modeling objective, so its training process is more noise-free and friendly. 
+
+In order to validate the performance of \ours{}, we train MoE language models with 1B parameters on 100B tokens and 3B parameters on 200B tokens from scratch. 
+Experimental results demonstrate that \ours{} produces MoE models with better validation loss than traditional auxiliary-loss-controlled models. 
+% Meanwhile, keeping the performance advantage, \ours{} can also achieve a much better load balance when the training batch size is properly configured.
+Meanwhile, keeping the performance advantage, \ours{} also achieves a significantly better load balance at the global and batch levels, and is naturally compatible with expert parallelism, which is usually employed for training extremely large MoE models. 
+
+\begin{figure}[t]
+  \centering
+    \includegraphics[width=0.9\linewidth]{figs/figure_815.png}
+\caption{\Ours{} selects experts according to a ``biased gating score'' in each training step and updates this expert-wise bias after each training step.}
+\label{fig:figure.pdf}
+\end{figure}
+
+
+\section{Background}
+% Mixture-of-Experts~(MoE) models have gained popularity due to their ability to scale up model capacity while maintaining computational efficiency. The experts of MoE models are often distributed across different devices for parallel computing. To ensure training and inference efficiency, it is crucial to assign a similar number of tokens to each expert, preventing any single expert from becoming a computational bottleneck. Moreover, poor load balance can lead to suboptimal performance~\citep{Zhou2022MixtureofExpertsWE}.
+
+\subsection{Mixture-of-Experts} Current dominant MoE architectures~\citep{Lepikhin2020GShardSG,Fedus2021SwitchTS,Dai2024DeepSeekMoETU} replace the MLP layers in standard transformers with MoE layers. In an MoE layer, Top-K routing is employed to select the experts for each token. Let $\mathbf{u}_t$ denote the input of the $t$-th token to an $N$-expert MoE layer, the output $\mathbf{h}_t$ is computed as follows:
+\begin{equation}
+\begin{aligned}
+& \mathbf{h}_t=\mathbf{u}_t+\sum_{i=1}^{N} g_{i, t} \operatorname{FFN}_i\left(\mathbf{u}_t\right), \\
+& g_{i, t}= \begin{cases}s_{i, t}, & s_{i, t} \in \operatorname{Topk}\left(\left\{s_{j, t} \mid 1 \leq j \leq N\right\}, K\right), \\
+0, & \text { otherwise, }\end{cases} \\
+& s_{i, t}=G\left(\mathbf{u}_t{ }^T \mathbf{e}_i\right),
+\end{aligned} 
+\end{equation}
+where $G$ is a nonlinear gating function and $ \mathbf{e}_i$ is the centroid of the $i$-th expert.
+
+
+
+\subsection{Auxiliary Loss for Load Balance}
+\label{sec:aux_loss}
+\paragraph{Auxiliary Loss} Uncontrolled routing strategies are likely to encounter load imbalance, which has two notable drawbacks. 
+Firstly, there is a risk of routing collapse~\citep{Shazeer2017OutrageouslyLN}, where the model consistently selects only a few experts, hindering sufficient training of the other experts. 
+Secondly, when experts are distributed across multiple devices, load imbalance can exacerbate computation bottlenecks. 
+To address these issues, an auxiliary loss~\citep{Fedus2021SwitchTS,Lepikhin2020GShardSG} is commonly employed to control load balance. 
+For a sequence of length $T$, the auxiliary loss is defined as:
+\begin{equation}
+   \begin{aligned}
+\mathcal{L}_{\text {Balance }} & =\alpha \sum_{i=1}^{N} f_i P_i, \\
+f_i & =\frac{N}{K T} \sum_{t=1}^T \mathbbm{1}(\text { Token } t \text { selects Expert } i), \\
+P_i & =\frac{1}{T} \sum_{t=1}^T s_{i, t},
+\end{aligned} 
+\end{equation}
+% where xxx.
+where $N$ is the total number of experts, $K$ is the number of experts selected for each token, $s_{i,t}$ is the routing score of Expert $i$ for Token $t$, $f_i$ represents the fraction of tokens routed to Expert $i$, $P_i$ denotes the average gating scores of Expert $i$, and $\alpha$ is a hyper-parameter controlling the strength of the auxiliary loss.
+
+
+
+
+\begin{figure}[t]
+  \centering
+    \includegraphics[width=0.8\linewidth]{figs/balance_mv_perplexity_new_new.png}
+\caption{The dilemma between load balance and model performance for auxiliary-loss-controlled training. A small auxiliary loss coefficient $\alpha$ leads to poor load balance, while a large $\alpha$ impairs the model performance. In contrast, our \ours{} method breaks this dilemma.}
+\label{fig:balancevsppl}
+\end{figure}
+
+\paragraph{The Dilemma Between Load Balance and Model Performance}
+\label{par:dilemma_balance_performance}
+The auxiliary loss mentioned above can encourage load balance, but it also interferes with language modeling training as an additional regularization term. The absence of an auxiliary loss or a small auxiliary loss coefficient $\alpha$ can lead to poor balance, while a large $\alpha$ can impair training, resulting in suboptimal performance. 
+% To quantify the load balance of a specific MoE layer, we propose the following maximal violation metric, where $\text{Load}_{i}$ denotes the number of tokens allocated to the $i$-th expert.\footnote{In Figure~\ref{fig:balancevsppl}, we use a validation set of the training corpus (see details in Appendix~\ref{app:training_settingd}) to calculate $\text{Load}_{i}$, and for simplicity, we average the $\text{Balance}_\text{MV}$ of all layers to form a model-level $\text{Balance}_\text{MV}$.}
+% \begin{equation}
+%     \textbf{Balance}_\textbf{MV} = \frac{\max_i \text{Load}_{i} - \overline{\text{Load}_{i}}}{\overline{\text{Load}_{i}}}.
+% \end{equation}
+To illustrate this dilemma, we present the relationship between load balance and model performance in Figure~\ref{fig:balancevsppl}. 
+We vary $\alpha$ among 1e-2, 1e-3, 1e-4, and 0, and present the corresponding $\text{MaxVio}_\text{global}$, which measures the degree of load balance and its computation details are described in \S~\ref{subsec:metrics}.
+As shown in the figure, a small $\alpha$ causes routing collapse, affecting the model efficiency and potentially leading to some experts being insufficiently learned or exploited; while a large $\alpha$ keeps load balance under control but notably degrades the model performance. 
+In order to break this dilemma, we propose \textbf{\ours{}} as a solution, which directly controls the expert load balance, but does not introduce unexpected gradients other than the gradients from the language modeling loss. 
+
+
+\section{Auxiliary-Loss-Free Load Balancing Strategy}
+\label{sec:FBC-Gate}
+
+
+% \paragraph{Bias-balanced routing}
+For a better load-balancing alternative that does not directly interfere with the main gradients from the training objective, we propose \textbf{\ours{}}, which directly adjusts the gating scores of each expert according to their balance condition. 
+As illustrated in Figure~\ref{fig:figure.pdf}, we add an expert-wise bias term $\boldsymbol{\{b_i\}_{i=1}^N}$ to the gating scores $s_{i,t}$ of each expert, and use the biased scores to determine the top-K selection:
+\begin{equation}
+\label{eq:PID_gate}
+\begin{aligned}
+& g_{i, t}= \begin{cases}s_{i, t}, & s_{i, t} + b_i \in \operatorname{Topk}\left(\left\{s_{j, t} + b_j\mid 1 \leq j \leq N\right\}, K\right), \\
+0, & \text { otherwise. }\end{cases} \\
+\end{aligned} 
+\end{equation}
+Note that the expert bias term $b_i$ is only used to adjust the routing strategy by influencing the top-K selection. 
+It is not added to the $g_{i,t}$ that weights the output of the selected experts when computing the final output of the MoE layer.
+
+% \paragraph{Balance-oriented bias update}
+In order to derive proper biases, we adjust each bias $b_i$ iteratively according to the following principle: decreasing it when the corresponding expert has a relatively heavy load, and vice versa. 
+To be specific, for each ${b}_i$, we keep monitoring its corresponding expert load on the previous batch. 
+If an expert has a heavy load on the previous batch, we will reduce its bias. 
+Otherwise, we will increase it. 
+Algorithm~\ref{algo:PID_gate} describes the details of our update algorithm for the expert-wise biases.
+It is worth noting that we update the biases based on the historical balance condition, since utilizing the load information of the current sequence will break the causal constraint of language modeling, leading to leakage of the information of future tokens. 
+Through the dynamic adjustment for the biases, we can achieve good expert load balance, but not directly introduce noisy gradients into the model like the auxiliary-loss-controlled method does. 
+
+\begin{algorithm}[t]
+\SetAlgoLined
+% \KwResult{Result of the algorithm}
+\KwIn{MoE model $\theta$,  training batch iterator $B$, bias update rate $u$.}
+% \KwOut{Here, provide the expected output/results of your algorithm}
+1. Initialize $b_i = 0$ for each expert\;
+\For{a batch $\{(\mathbf{x}_k, \mathbf y_k)\}_k$ in $B$}{
+    2. Train MoE model $\theta$ on the batch data $\{(\mathbf{x}_k, \mathbf y_k)\}_k$, with gating scores calculated according to Eq.~(\ref{eq:PID_gate})\;
+    3. Count the number of assigned tokens $c_i$ for each expert, and the average number $\overline{c_i}$\;
+    4. Calculate the load violation error $e_i = \overline{c_i} - c_i$\;
+    4. Update $\mathbf b_i$ by $b_i = b_i + u * \mathrm{sign}(e_i)$\;
+}
+
+\KwOut{trained model $\theta$, corresponding bias $\mathbf b_i$}
+\caption{Adjusting the per-expert bias ${b}_i$ during training}
+\label{algo:PID_gate}
+\end{algorithm}
+
+
+
+\paragraph{Comparison with Other Load Balancing Methods.}
+% \subsection{Comparison with Other Load Balancing Methods}
+
+% The proposed \ours{} method addresses the trade-off between load balance and model performance by introducing a bias term to the expert's gating score. 
+% This bias is updated based on the previous batch's expert load, enabling better load balancing without directly interfering with the training gradients. 
+% As a result, the feedback-controller-inspired \ours{} allows for auxiliary-loss-free training while maintaining good load balance. 
+In order to show the theoretical advantages of \ours{}, we compare it with other two mainstream load balancing methods, i.e., the auxiliary-loss-controlled method~\citep{Lepikhin2020GShardSG,Fedus2021SwitchTS} and the Expert Choice~(EC)~\citep{Zhou2022MixtureofExpertsWE} method. 
+As described in \S~\ref{sec:aux_loss}, the auxiliary-loss-controlled method faces the dilemma between load balance and model performance, and a perfect trade-off may not exist. 
+As for the EC method, it will break the causal constraint of language modeling, since the target experts of each token are conditioned on the future tokens in the same sequence or batch. 
+This will result in the leakage of information about future tokens, thus destroying the generalization of the model. 
+Table~\ref{tab:comparison_load_control_methods} summarizes the properties of different load balancing methods.
+
+\begin{table}[t]
+\caption{Comparison among different load balancing methods. The good property is displayed in \textcolor{ddmgreen}{green} and the bad property in \textcolor{ddmred}{red}.}
+\label{tab:comparison_load_control_methods}
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+\textbf{Load Balancing Methods} & \makecell{\textbf{Balanced} \\ \textbf{Expert Load}} & \makecell{\textbf{Interference} \\ \textbf{Gradients}} & \makecell{\textbf{Future Token} \\ \textbf{Leakage}}\\
+\midrule
+Loss-Controlled (strong auxiliary loss) & \textcolor{ddmgreen}{balanced} & \textcolor{ddmred}{strong} & \textcolor{ddmgreen}{no leakage} \\
+Loss-Controlled (weak auxiliary loss) & \textcolor{ddmred}{imbalanced} & \textcolor{ddmgreen}{weak} & \textcolor{ddmgreen}{no leakage} \\
+Expert Choice & \textcolor{ddmgreen}{balanced}  & \textcolor{ddmgreen}{none} & \textcolor{ddmred}{with leakage} \\
+\midrule
+Loss-Free (Ours) & \textcolor{ddmgreen}{balanced} & \textcolor{ddmgreen}{none} & \textcolor{ddmgreen}{no leakage} \\ 
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+% \textcolor{green}{\checkmark}
+% \textcolor{red}{$\times$}
+
+
+% \section{Experiment}
+% % 这一部分独立成章
+% \subsection{Model Achitecture}
+% \label{par:model_achitecture}
+% We use the DeepSeekMoE~\citep{Dai2024DeepSeekMoETU} architecture as the backbone. It segments experts into finer granularity for higher expert specialization and more
+% accurate knowledge acquisition, and introduces some shared experts for mitigating knowledge redundancy among routed experts. According to \cite{Dai2024DeepSeekMoETU}, it outperforms conventional MoE architectures like GShard~\citep{Lepikhin2020GShardSG} by a large margin. Two model size are used: 1B and 3B (detailed architecture hyper-parameters listed in Appendix~\ref{}). We explore update rate and variants of \ours{} in 1B size (see details in \S~\ref{sec:empirical_study}), and copy them to 3B size to save computation. 
+
+% Recently, many works have shown that \textit{sigmoid gate} can achieve better performance~\cite{}\lean{need cite some paper, already find some, will added later} than \textit{softmax gate}. Our experiments also support this conclusion in our specific settings (See Appendix~\ref{}). So, in the following section, we will focus on \textit{sigmoid gate}, i.e. $G = \textit{sigmoid function}$, with \textit{softmax gate} discussed in Appendix~\ref{}.
+
+% The vanilla MoE with auxiliary loss coefficient $\alpha$ of 0.001 is used as the baseline. The value 0.001 is selected based on Figure~\ref{fig:balancevsppl}, to achieve a reasonable trade-off between model performance and load balance.
+
+\section{Experiments}
+
+\subsection{Experimental Setups}
+
+\paragraph{Model Architecture.}
+\label{par:model_architecture}
+We employ the DeepSeekMoE~\citep{Dai2024DeepSeekMoETU} architecture as the backbone since it outperforms conventional MoE architectures like GShard~\citep{Lepikhin2020GShardSG} significantly. 
+Compared with GShard~\citep{Lepikhin2020GShardSG}, it segments experts into finer granularity and isolates some experts as shared ones. 
+Slightly different from DeepSeekMoE, in our main experiments, we choose sigmoid instead of softmax as the gating function $G$, since we find that the sigmoid baseline performs better than the softmax baseline. 
+Even so, we still provide the experimental results and discussion for the softmax gate in Appendix~\ref{app:softmax_gate}.
+Our experiments are based on two model sizes of 1B and 3B total parameters, and we tune the bias update rate under only the 1B scale. 
+Experiments under the 3B scale directly inherit the best configuration for the 1B scale. 
+Due to the page limit, we present more details about our architecture in Appendix~\ref{app:model_achitecture}. 
+
+
+
+\paragraph{Training Settings}
+We use a multilingual training corpus created by DeepSeek-AI, sourced from a diverse range of textual materials including web text, mathematical material, coding scripts, and published
+literature.
+We employ the HuggingFace Tokenizer\footnote{\url{https://github.com/huggingface/tokenizers}} to train a byte pair encoding (BPE)~\citep{Sennrich2015NeuralMT} tokenizer with a vocabulary size of 32K. 
+In order to draw solid conclusions, we train the 1B model on 100B tokens and the 3B model on 200B tokens to ensure sufficient training. 
+We apply the cosine learning rate scheduler~\citep{Loshchilov2016SGDRSG} and multi-step learning rate scheduler~\citep{Dai2024DeepSeekMoETU} for the 1B and 3B models, respectively. 
+Due to the page limit, we list more details about our training settings and hyper-parameters in Appendix~\ref{app:training_settingd}).
+
+\paragraph{Baseline.}
+We compare our \ours{} method with the conventional auxiliary-loss-controlled method. 
+For the baseline, we set the auxiliary loss coefficient $\alpha$ to 0.001 to achieve a reasonable trade-off between model performance and load balance~(see Figure~\ref{fig:balancevsppl}). 
+We do not take the EC method into comparison due to its issue of future token leakage, which we will discuss in depth in~\S~\ref{EC_discussion}.
+
+\paragraph{Metrics.}
+\label{subsec:metrics}
+We reserve a validation set from the training corpus to evaluate model performance and load balance. 
+For model performance, we take perplexity as the metric. 
+For load balance, we introduce a metric called maximal violation ($\textbf{MaxVio}$) to quantify the degree of load balance of an MoE layer: 
+\begin{equation}
+    \text{MaxVio} = \frac{\max_i \text{Load}_{i} - \overline{\text{Load}_{i}}}{\overline{\text{Load}_{i}}},
+\end{equation}
+where $\text{Load}_{i}$ represents the number of tokens assigned to the $i$-th expert, and $\overline{\text{Load}_{i}}$ denotes the expected expert load under perfect load balance. 
+
+$\textbf{MaxVio}$ has two variants: $\textbf{MaxVio}_\textbf{global}$ and $\textbf{MaxVio}_\textbf{batch}$. 
+For $\textbf{MaxVio}_\textbf{global}$, we count $\text{Load}_{i}$ on the whole validation set, so it reflects the degree of balanced expert utilization and efficiency upper bound when the batch size approaches the limitation. 
+For $\textbf{MaxVio}_\textbf{batch}$, we count $\text{Load}_{i}$ on each training batch, so it is more related to the training efficiency. 
+For simplicity, in the rest of this paper, we report the $\text{MaxVio}$ averaged across all layers as a load balance measurement of the whole model.  
+% Still, when employing various multiple parallelism strategies, efficiency is influenced by the choice of \texttt{micro\_batch\_size} and \texttt{ep\_data\_parallel\_size}, which will be discussed in detail in \S~\ref{subsec:load_balance_micro_batch}.
+
+\subsection{Main Results}
+% Table~\ref{tab:main_results} shows xxx. 
+Table~\ref{tab:main_results} shows the validation perplexity and $\text{MaxVio}_\text{global}$ for the 1B and 3B MoE models trained with auxiliary loss or our auxiliary-loss-free load balancing strategy.
+As shown in the table, compared with the auxiliary-loss-controlled method, our \ours{} achieves better perplexity and much better global load balance for both 1B and 3B models. 
+In addition, to present the load balance condition during training, we provide a load balancing curve depicting $\text{MaxVio}_\text{batch}$ over training steps in Figure~\ref{fig:update_rate_violations_main_avg100step_combined.pdf}, which demonstrates the persistent advantage of \ours{} on load balance. 
+In summary, our \ours{} method avoids interfering gradients during training and effectively controls the load balance, breaking the dilemma between load balance and model performance in MoE training.
+
+\begin{table}[t]
+\caption{\Ours{} achieves lower perplexity and better load balance on both 1B and 3B models. A validation set is used to calculate these metrics (see details in Appendix~\ref{app:training_settingd}).}
+\label{tab:main_results}
+\begin{center}
+\begin{tabular}{cc|cc}
+\toprule
+\textbf{Model Size} & \textbf{Load Balancing Methods} & \textbf{Validation Perplexity} &  $\textbf{MaxVio}_\textbf{global}$\\
+\midrule
+\multirow{2}{*}{1B}  & Loss-Controlled & 9.56 & 0.72 \\
+& Loss-Free & \textbf{9.50} & \textbf{0.04} \\ 
+
+\hline
+\multirow{2}{*}{3B}  & Loss-Controlled & 7.97 &  0.52 \\
+& Loss-Free & \textbf{7.92} & \textbf{0.04} \\ 
+
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+    \includegraphics[width=\linewidth]{figs/update_rate_violations_main_avg100step_combined.pdf}
+\caption{\Ours{} maintains a better load balance throughout most of the training time. Here, $\text{MaxVio}_\text{batch}$ is averaged over 100 neighboring steps for visibility purposes.}
+\label{fig:update_rate_violations_main_avg100step_combined.pdf}
+\end{figure}
+
+\subsection{Empirical Studies on Bias Update Algorithm} % 叫ablation可能不完全合适，或者叫analysis
+\label{sec:empirical_study}
+
+We conduct empirical studies on the update rate and variants of the bias update algorithm to validate the optimal configuration used in our main experiments. 
+
+\paragraph{Update rate.} 
+The update rate $u$ in Algorithm~\ref{algo:PID_gate} controls the speed at which the expert bias $\{{b}_i\}_{i=1}^N$ converges to the ``suitable bias''. Figure~\ref{fig:update_rate_violations_avg100step.pdf} illustrates that an overly low update rate $u=0.0001$ may lead to slow convergence, while an unnecessarily high update rate $u=0.01$ can cause undesirable fluctuations of the expert bias ${b}_i$ during the later stage of training, deteriorating load balance in this stage. Both situations can impair performance. An appropriate choice is $u=0.001$, which shows good training balance and validation perplexity.%Table~\ref{tab:update_rate} and Figure~\ref{fig:update_rate_violations_avg100step.pdf} support this hypothesis, suggesting that $u=0.001$ is the optimal choice.
+
+
+% \begin{table}[t]
+% \caption{The effect of update rate $u$ on model performance and load balance.}
+% \label{tab:update_rate}
+% \begin{center}
+% \begin{tabular}{c|c|c}
+% \toprule
+% \textbf{Update Rate} $\boldsymbol{u}$ & \textbf{Perplexity} & $\textbf{MaxVio}_\textbf{global}$ \\
+% \midrule
+% 0.01 & 9.51 & 0.25\\ 
+% 0.001 & \textbf{9.50} & \textbf{0.04} \\
+% 0.0001 & 9.51  & 0.05 \\
+% \bottomrule
+% \end{tabular}
+% \end{center}
+% \end{table}
+
+\begin{figure}[t]
+  \centering
+    \includegraphics[width=0.8\linewidth]{figs/update_rate_violations_avg100step.pdf}
+\caption{The impact of update rate on training load balance. A low update rate shows poor load balance in the early stage of training, while a high update rate deteriorates load balance in the later stage. Validation PPL denotes the validation perplexity.}
+\label{fig:update_rate_violations_avg100step.pdf}
+\end{figure}
+
+
+\paragraph{Update rule.}
+We investigate a different update rule of the expert-wise biases. 
+To be specific, we attempt to change the update rule of $ b_i =  b_i + u*\mathrm{sign}(e_i)$ to $b_i = b_i + u*e_i$, which encourages the bias of experts with high violation errors to change faster. Although this variant slightly improves load balance, it does not lead to better performance, as shown in Table~\ref{tab:update_rule}.
+Therefore, we maintain the $\mathrm{sign}$ version.%感觉两个其实也难说哪个更好，就这样说吧
+
+% This may be attributed to the increased fluctuation caused by the uneven update steps, as it cannot maintain the chosen order within the positive/negative-error expert set like the ``$\mathrm{sign}$'' version does.
+\begin{table}[t]
+\caption{The variant $ b_i = b_i + u*e_i$ slightly improves load balance but does not show improvement in model performance.}
+\label{tab:update_rule}
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+\multicolumn{1}{c|}{\textbf{Method}} & \textbf{Perplexity} & $\textbf{MaxVio}_\textbf{global}$ \\
+\midrule
+$b_i =  b_i + u*\text{sign}(e_i)$, $u=0.001$ & \textbf{9.50} & 0.044 \\
+$b_i = b_i + u*e_i$, $u=0.01$ & 9.53 & \textbf{0.028}\\ 
+$ b_i =  b_i + u*e_i$, $u=0.001$ &  9.51 & 0.036 \\
+$ b_i = b_i + u*e_i$, $u=0.0001$ & 9.51  & 0.040 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Multiplicative bias.}
+In addition to adding the expert-wise biases to the gating scores, using multiplicative biases is also a potential variant:
+\begin{equation}
+\label{eq:pid_gate_bias}
+\begin{aligned}
+& g_{i, t}= \begin{cases}s_{i, t}, & s_{i, t}  * {b}_i \in \operatorname{Topk}\left(\left\{s_{j, t}  * {b}_j\mid 1 \leq j \leq N\right\}, K\right), \\
+0, & \text { otherwise, }\end{cases} \\
+\end{aligned} 
+\end{equation}
+% These $\{\mathbf{b}_i\}_{i=1}^N$ can be updated the same procedure as Algorithm~\ref{algo:PID_gate}, except that they should be initialized as 1 instead of 0. Table~\ref{tab:multiplicative bias} shows that it leads to slightly worse model performance, which may be attributed to the fact that it can affect the relative order of the experts with high $s_{i,t}$ more easily than additive bias, since it changes the ratio rather than the gap.
+These $\{{b}_i\}_{i=1}^N$ can be updated using a similar procedure to Algorithm~\ref{algo:PID_gate}, except that they should be initialized as 1 instead of 0. 
+Table~\ref{tab:multiplicative bias} shows that using multiplicative biases results in slightly worse model performance compared to using additive biases, without significant improvements in load balance.
+Based on these findings, we conclude that additive biases are a more suitable choice for our method.
+
+% This may be because multiplicative bias can more easily affect the relative order of experts with large $s_{i,t}$ gaps, as it changes the relative ratio rather than the absolute score gap between experts.
+
+\begin{table}[t]
+\caption{Multiplicative bias shows similar load balance but slightly worse performance compared to additive bias.}
+\label{tab:multiplicative bias}
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+\multicolumn{1}{c|}{\textbf{Method}} & \textbf{Perplexity} & $\textbf{MaxVio}_\textbf{global}$ \\
+\midrule
+Addative Bias, $u=0.001$ & \textbf{9.50} & 0.044 \\
+Multiplicative Bias, $u=0.01$ & 9.52 & 0.041 \\ 
+Multiplicative Bias, $u=0.001$ &  9.52 & \textbf{0.036} \\
+Multiplicative Bias, $u=0.0001$ & 9.54  & 0.048 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\section{Discussion}
+\subsection{\OURS{} Is Compatible with Expert Parallelism}
+\label{subsec:load_balance_micro_batch}
+% 1. 大规模 MoE 模型会使用 edp（due to 显存），这样的场景下，不均衡的分配会影响计算效率。
+% 2. noaux TC 保证的是全局的近似均衡，因此其均衡性跟一个 “mb” 中的 token 数有关，mb 越大，均衡性越好（图）
+% 3. 恰好 edp 会增大实际的 “mb”，因此当有 ep 的时候，我们的方法在大 mb 下，更有优势。综上，noaux TC 天然适配于 edp 的场景。
+Extremely large-scale MoE models often employ expert parallelism~\citep{Lepikhin2020GShardSG} for training or inference, which distributes experts across different devices to reduce memory requirements. 
+In such scenarios, load balance on the data in a single computation step is crucial for efficiency. 
+Due to expert parallelism, each computation step involves \texttt{micro\_batch\_size * ep\_data\_parallel\_size} samples, which we refer to as a \textbf{computation batch}. 
+Here, \texttt{micro\_batch\_size} denotes the number of samples processed in one gradient accumulation step on a single device.
+
+\Ours{} can achieve nearly optimal global load balance, and the load balance in each computation step will get closer to the global load balance as the computation batch size increases. 
+In Figure~\ref{fig:actual_batch_violation_combined.pdf}, we examine the computation-batch-level load balance with the $\text{MaxVio}_\text{computation-batch}$ metric. 
+The results show that the load balance of our \ours{} always keeps improving as the computation batch size increases, but the load balance of the auxiliary-loss-controlled method approximately maintains a constant level when the computation batch is large.
+Since expert parallelism will significantly increase the computation batch size by $\texttt{ep\_data\_parallel\_size}$ times, \ours{} is naturally compatible with large-scale MoE training, and its advantage on the load balance will be further enhanced as the size of expert parallelism increases.
+
+% In real-world large-scale MoE model training or inference, multiple parallelism strategies are often integrated, including tensor parallelism~\citep{Korthikanti2022ReducingAR,Narayanan2021EfficientLL,Shoeybi2019MegatronLMTM}, Zero Redundancy Optimizer~(ZeRO) data parallelism~\citep{Rajbhandari2019ZeROMO}, pipeline parallelism~\citep{Harlap2018PipeDreamFA}, and more specifically, expert parallelism\citep{Lepikhin2020GShardSG} by combining data and tensor parallelism. 
+% In such scenarios, the \textbf{``actual batch size''} corresponds to the data involved in a single all-to-all operation for expert parallelism, calculated as \texttt{micro\_batch\_size * ep\_data\_parallel\_size}, where \texttt{micro\_batch\_size} refers to the data processed in one pipeline stage on a single device.
+% The experimental results in the former sections demonstrate that \ours{} guarantees good global-level/batch-level load balance. Here, we further examine the ``actual-batch''-level $\text{MaxVio}_\text{actual\_batch}$ in Figure~\ref{fig:actual_batch_violation_combined.pdf}. The results show that \ours{} achieves better balance as the ``actual-batch'' size increases. A large ``actual-batch'' is common in large-scale MoE training or inference, since they usually have a large $\texttt{ep\_data\_parallel\_size}$, leading to large ``actual batch''. So, we can conclude that \ours{} is well compatible with expert parallelism, and has a significant advantage when the scale of expert parallelism increases.
+
+% Interestingly, in Figure~\ref{fig:actual_batch_violation_combined.pdf}, the 1B baseline exhibits worse balance than the 3B baseline, attributed to the high violation of the 1B model's last layer (approximately 1.7). This observation might indicate the instability of the auxiliary loss method used in the baseline model.\lean{shall we just remove it?/remove it to caption}
+
+% \lean{we might discuss device-level?}
+
+\begin{figure}[t]
+  \centering
+    \includegraphics[width=\linewidth]{figs/actual_batch_violation_combined.pdf}
+\caption{\Ours{} achieves improved balance compared to auxiliary-loss training as the computation-batch size increases, demonstrating its superiority when a moderately sized computation-batch is utilized.}
+\label{fig:actual_batch_violation_combined.pdf}
+\end{figure}
+
+% 这里有个问题是我们一个设备上算是有几个expert?要不要统计这个？
+
+% We measure the load balance under different 'actual batch' sizes in Figure~\ref{}. We can see that \textbf{\ours{}} shows advantage as long as ... \lean{should we consider the case that one device with multiple experts and counts the group violation??}
+
+% \subsection{Expert Choice: Load Balance under Training-Inference Inconsistency}
+% \label{EC_discussion}
+% Expert Choice~(EC)~\citep{Zhou2022MixtureofExpertsWE} is a routing strategy that have experts selecting top-$k$ tokens instead of tokens selecting top-$k$ experts, i.e. 
+
+% \begin{equation}
+%     g_{i, t}= \begin{cases}s_{i, t}, & s_{i, t} \in \operatorname{Topk}\left(\left\{s_{i, j} \mid 1 \leq j \leq T\right\}, \frac{KT}{N}\right), \\
+% 0, & \text { otherwise, }\end{cases}
+% \end{equation}
+% Though it inherently controls load balance (each expert selects the same number of tokens), Expert Choice faces two problems, non-causality and future token leakage, the latter one significantly fatal.
+
+% \paragraph{Non-causality}
+% The routing strategy of Expert Choice acquires the value of all $s_{i,t}$ in the sequence, which is impossible when casually decoding the sequence in inference. This non-causality severely restricts the usage of Expert Choice MoE models in the LLM era. \cite{Raposo2024MixtureofDepthsDA} try to mitigate this problem via adding a small auxiliary MLP predictor for routing, yet such training-inference consistency still poses a threat to reliable model scaling.
+
+% \paragraph{Future token leakage}
+% A more severe problem is information leakage of future tokens. Let $R = \frac{K}{N}$ denote the sparse ratio, the information the routing allocation of a single layer could carry is 
+% \begin{equation}
+%     \begin{aligned}
+%     &\text{Information leakage via non-casual routing allocation (bit per token)}\\
+%     = & \left. \log_2 \binom{\frac{KT}{N}}{T} \right/ T\\
+%     \geq & \left. \log_2 \frac{((1-\frac{K}{N})T)^{\frac{K}{N}T}}{(\frac{K}{N}T)^{\frac{K}{N}T}}\right/ T\\
+%     =& \log\frac{1-R}{R}.
+% \end{aligned}
+% \end{equation}
+% For a model with a sparse ratio $R$ of 0.125 and 9 MoE layers, the total leakage information for a single token is 25 bits, sufficient to reduce the loss to 0 without any actual learning. This leakage can be inferred by two experimental evidence: (1) reducing the token chunk inside which to perform top-$k$ selection unnaturally reduces loss, which can be attributed to it that a smaller chunk makes it easier for the model to utilize such leakage; (2) shuffling the router inputs among chunks mitigate training abnormality~\citep{Clark2022UnifiedSL}, which is probably because that the model is harder to utilize such leakage in this case. We provide the detailed experimental results in Appendix~\ref{app:ec}.
+
+% The future token leakage is quite fatal, since one cannot tell the true model performance from leakage, which hinders reliable model scaling. Also, it poses a threat of numerous waste of time and money to anyone who tries to train a large MoE model base on Expert Choice, since a large model may reduce loss fully based on the information leakage of future tokens.
+
+\subsection{Load Balancing and Future Token Leakage}
+\label{EC_discussion}
+
+% In MoE language models
+For casual language models, load balancing methods must adhere to the causal constraint of language modeling to avoid future token leakage. While conventional auxiliary-controlled balancing and our \ours{} obey this constraint, Expert Choice (EC)~\citep{Zhou2022MixtureofExpertsWE} violates it. EC ensures perfect load balance by assigning exactly the same number of tokens to each expert. However, this approach inherently leads to a severe issue of future token leakage.
+
+In EC, future tokens can influence the expert assignment of previous tokens. Figure~\ref{fig:EC_illustration} illustrates how information can be easily transmitted within a sequence via such influence. Theoretically, the token assignment of an MoE layer with sparse ratio $R$ (average activated experts per token $K$ divided by total expert number $N$) can leak more than $K\log_2 \frac{1-R}{R}$ bits per token (proof in Appendix~\ref{app:ec_proof}). For a 9-layer MoE model with 16 experts and an average of 2 experts per token, this amounts to 50 bits, sufficient for each token to determine its successor's identity. 
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figs/EC_fig_new.png}
+% \includesvg[width=\textwidth]{figs/EC_fig_new.svg}
+\caption{
+An example of future token leakage in EC. 
+Future tokens can influence the expert assignment of previous tokens. 
+Such an assignment can help previous tokens to infer the identity of their successors. 
+% In EC, future tokens can leak their identity (``A'' or ``B'') to previous tokens by influencing previous tokens' expert assignment through appropriate gate score values. This is straightforward when top-K selection is performed within a 2-token sequence. For longer sequences, it becomes more complex as latter tokens must carefully avoid affecting previously designed expert allocation. This example shows an MoE layer with 2 experts and an average of one expert assigned per token. 
+}
+\label{fig:EC_illustration}
+\end{figure}
+
+We designed experiments to demonstrate the existence of future token leakage in realistic model training. \textbf{(1)} We reduced the chunk size, within which top-K selection is performed, from 8192 tokens (4 sentences) to 512 (1/4 sentence), with the expectation of exposing such leakage.  We observed an abnormal loss drop (about 10\%), confirming the presence of leakage. \textbf{(2)} We made leakage more difficult by shuffling tokens across chunks in the top-K selection step, and observed that the abnormal loss drop was mitigated. Detailed experimental results on EC's information leakage are provided in Appendix~\ref{app:ec}.
+
+Future token leakage is fatal since it destroys the generalization of a model and prevents reliable evaluation of the model performance.
+Therefore, compared with EC, scaling up an MoE model with our \ours{} is safer. 
+
+% Expert Choice (EC)~\citep{Zhou2022MixtureofExpertsWE} is a routing strategy where experts select the top-$k$ tokens instead of tokens selecting the top-$k$ experts:
+% \begin{equation}
+%     g_{i, t}= \begin{cases}s_{i, t}, & s_{i, t} \in \operatorname{Topk}\left(\left\{s_{i, j} \mid 1 \leq j \leq T\right\}, \frac{KT}{N}\right), \\
+% 0, & \text { otherwise. }\end{cases}
+% \end{equation}
+
+% Let $R = \frac{K}{N}$ denote the MoE sparsity. 
+% For EC, the maximum information leakage $I$ (in bits per token), i.e., the information that the routing allocation of a single layer can carry is:
+% \begin{equation}
+%     \begin{aligned}
+%     I = & \left. \log_2 \binom{\frac{KT}{N}}{T} \right/ T\\
+%     \geq & \left. \log_2 \frac{((1-\frac{K}{N})T)^{\frac{K}{N}T}}{(\frac{K}{N}T)^{\frac{K}{N}T}}\right/ T\\
+%     =& \log\frac{1-R}{R}.
+% \end{aligned}
+% \end{equation}
+% For a model with a sparse ratio $R$ of 0.125 and 9 MoE layers, the total leakage information for a single token is 25 bits, which is sufficient to reduce the loss to 0 without any actual learning. 
+% The real existence of such theoretically derived leakage can be validated by two experimental observations:
+% (1) reducing the chunk size in which EC performs top-$k$ selection unnaturally reduces loss, likely because a smaller chunk makes it easier for the model to utilize information leakage;
+% (2) shuffling tokens before chunking and top-$k$ selection mitigates training abnormalities~\citep{Clark2022UnifiedSL}, probably because the model has more difficulty utilizing the leakage in this case. 
+% Detailed experimental results about the information leakage of EC are provided in Appendix~\ref{app:ec}.
+
+% In EC, future tokens can affect the expert assignment of previous tokens. Figure~\ref{fig:EC_illustration} illustrates how information can be easily transmitted within a sequence.  Theoretically, if all possible token assignment combinations can be fully utilized to transmit message, an MOE layer with capacity factor $c$ (on average how many experts are utilized by a token) can leak more than $\log \frac{1-c}{c}$ tokens per token. That is 25 bits for a 9-layer MoE model with 16 experts and averagely select 2 experts per token. Such amount of information could help every token to determine its successor.
+
+% \begin{figure}[t]
+% \centering
+% \includegraphics[width=\linewidth]{figs/EC_fig.pdf}
+% \caption{In EC, future tokens can leak their identity (``A'' or ``B'') to previous tokens by affecting previous tokens' expert assignment via proper gate score values. It is easy when the top-k selection happens inside a 2-token sequence. For longer sequences, it is more complicated since the latter tokens should carefully not to affect previous designed expert allocation. Here we shows an MOE layer with 2 experts and averagely one expert is assigned per token.}
+% \label{fig:EC_illustration}
+% \end{figure}
+
+% We designed experiments to prove the existence of future token leakage in real model training. \textbf{(1)} To make such leakage easier to happen, we reduced the size of the chunk size (inside which top-K selection is performed) from 8192 (four sentences) to 512 (a quarter of a sentence) and observed an abnormal loss drop (about 10\%), sufficient to prove the existence of leakage. \textbf{(2)} Also, if we make it harder for the model to leak information by randomly allocate tokens to each chunk during top-K selection, the abnormal loss drop is mitigated. Detailed experimental results about the information leakage of EC are provided in Appendix~\ref{app:ec}.
+
+
+
+
+% Moreover, it poses a threat of significant waste of time and money to anyone attempting to train a large MoE model based on Expert Choice, as a large model may reduce loss fully based on the information leakage of future tokens rather than actual learning.
+
+
+% \lean{how to write the experiments about leakage?}
+% 这个粗略说一下模型大小和训练数据量，然后附上实验结果（附录）
+
+\section{Conclusion}
+In this work, we introduced \textbf{\ours{}}, a novel MoE load balance control method without introducing auxiliary-loss gradients. \Ours{} addresses the issue of traditional auxiliary-loss load balance control, which introduces additional gradients during training and potentially impairs model performance when enforcing load balance. Experiments conducted on 1B and 3B MoE models, trained on 100B and 300B tokens respectively, demonstrate that \ours{} achieves better model performance and load balance compared to the traditional auxiliary-loss training.
+
+% \section{Limitation}
+
+
+\bibliography{iclr2024_conference}
+\bibliographystyle{iclr2024_conference}
+
+\appendix
+\section{Model Architecture}
+\label{app:model_achitecture}
+We employ the DeepSeekMoE~\citep{Dai2024DeepSeekMoETU} architecture as the backbone, which introduces shared experts to mitigate knowledge redundancy among routed experts:
+\begin{equation}
+    \begin{aligned}
+& \mathbf{h}_t=\mathbf{u}_t+\sum_{i=1}^{N_s} \operatorname{FFN}_i^{(s)}\left(\mathbf{u}_t\right)+\sum_{i=1}^{N_r} g_{i, t} \operatorname{FFN}_i^{(r)}\left(\mathbf{u}_t\right), \\
+\end{aligned}
+\end{equation}
+where $r$ denotes the routed experts, while $s$ the shared experts. DeepSeekMoE replaces all FFN layers with MoE layers, except the dense FFN layer just after the input embedding layer.
+
+The detailed architecture hyper-parameters are listed in Table~\ref{tab:1B3B_architecture}.
+
+\begin{table}[t]
+\caption{Model architecture.}
+\label{tab:1B3B_architecture}
+\begin{center}
+\begin{tabular}{c|cc}
+\toprule
+\textbf{hyper-parameters} & \textbf{1B} & \textbf{3B} \\
+\midrule
+Vocab size & 32064 & 32064\\
+Hidden size & 1024 & 1280\\
+Attention heads & 8 & 10\\
+MoE layers & 9 & 11\\
+Granularity~($\frac{d_\text{ff}}{d_\text{expert}}$) & $\frac{\text{16}}{\text{3}}$ & 4\\
+Shared experts & 2 & 2\\
+Routed experts & 64 & 64\\
+Activated routed experts & 6 & 6\\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\section{Training Settings}
+\label{app:training_settingd}
+Following the work of \cite{Dai2024DeepSeekMoETU}, we initialize all learnable parameters with a standard deviation of 0.006, and set the maximum training sequence length to 2048.
+
+For the 1B model, we employ a cosine learning rate scheduler with warmup, setting the learning rate to 1e-3, the minimum learning rate to 1e-4, and the warmup steps to 1000. The training batch size for the 1B model is set to 1152, resulting in a total of 40000 training steps (100B tokens).
+
+For the 3B model, we use a multistep learning rate scheduler with stage steps = [45211, 50862, 56514] and corresponding stage learning rates of [7.8e-4, 2.47e-4, 7.8e-5]. The warmup steps for the 3B model are set to 2000. We use a training batch size of 1728 for the 3B model, resulting in a total of 56514 training steps (200B tokens).
+
+For validation, we leave around 70M tokens from the training corpus as the validation set (30 * 1B\_batch\_size * max\_seq\_len = 20 * 3B\_batch\_size * max\_seq\_len = 71M tokens).
+
+\section{Experiments with Softmax Gate}
+\label{app:softmax_gate}
+\subsection{Comparison of Sigmoid Gate Baseline and Softmax Gate Baseline}
+We compare the sigmoid gate baseline and the softmax gate baseline with varying auxiliary loss coefficients $\alpha$ on a 1B-sized model. As shown in Figure~\ref{fig:softmax_sigmoid_comparison}, the softmax gate exhibits higher perplexity under similar load balance conditions, and its performance is more sensitive to load imbalance compared to the sigmoid gate.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.8\linewidth]{figs/balance_mv_perplexity_softmax_new.png}
+\caption{Comparison of the sigmoid gate baseline and the softmax gate baseline. The softmax gate exhibits higher perplexity under similar load balance conditions and is more sensitive to load imbalance compared to the sigmoid gate.}
+\label{fig:softmax_sigmoid_comparison}
+\end{figure}
+
+
+% \subsection{\ours{} with \textit{Softmax Gate}}
+% As mentioned in \S~\ref{par:model_architecture}, it is harder to adjust the per-expert bias for \textit{softmax gate} due to softmax's normalization, which makes the score gap between two experts susceptible to other experts' scores. We conduct a primitive study and find it is better to use $\mathbf b_i = \mathbf b_i + u*e_i$ to keep load balance well in control. We use the same 1e-3 update rate as \textit{sigmoid gate}. As for the baseline, we choose $\alpha$ = 0.0003, which results in lowest perplexity for \textit{Softmax Gate}. The result is show in Table~\ref{tab:softmax_results}, where \ours{} has minor advantage in perplexity, but still has much better load balance. Also, Figure~\ref{update_rate_violations_softmax_avg100step.pdf} shows that \ours{} keeps a much better balance most of the training time.
+
+% \begin{table}[t]
+% \caption{\textbf{\ours{}} has minor advantage in perplexity, but still has much better load balance than auxiliary-loss training.}
+% \label{tab:softmax_results}
+% \begin{center}
+% \begin{tabular}{c|cc}
+% \toprule
+% Method & \textbf{Perplexity} &  \textbf{Balance$_\text{MV}$}\\
+% \midrule
+% \textbf{Auxiliary Loss} & 9.604 & 0.937 \\
+% \textbf{\ours{}} & \textbf{9.599} & \textbf{0.027} \\ 
+
+% \bottomrule
+% \end{tabular}
+% \end{center}
+% \end{table}
+
+% \begin{figure}[t]
+%   \centering
+%     \includegraphics[width=0.8\linewidth]{figs/update_rate_violations_softmax_avg100step.pdf}
+% \caption{\ours{} maintains better load balance throughout most of the training time.}
+% \label{fig:update_rate_violations_softmax_avg100step.pdf}
+% \end{figure}
+
+\subsection{Loss-Free Load Balancing with Softmax Gate}
+Adjusting the per-expert bias for the softmax gate is more challenging due to the normalization property of softmax, which makes the score gap between two experts sensitive to the scores of other experts. In such a situation, we choose the $\mathbf b_i = \mathbf b_i + u*e_i$ variant to maintain load balance, where $u$ is set to 1e-3. For the baseline, we choose $\alpha$ = 0.0003, which yields the lowest perplexity for the softmax gate. The results are presented in Table~\ref{tab:softmax_results}, showing that \ours{} achieves a slightly lower perplexity while maintaining significantly better load balance compared to the auxiliary-loss training method. Figure~\ref{fig:update_rate_violations_softmax_avg100step.pdf} confirms that \ours{} maintains a superior load balance throughout most of the training process.
+
+\begin{table}[t]
+\caption{For softmax gate, \ours{} achieves a slightly lower perplexity while reaching a significantly better load balance compared to the auxiliary-loss training method. }
+\label{tab:softmax_results}
+\begin{center}
+\begin{tabular}{c|cc}
+\toprule
+\textbf{Load Balancing} & \textbf{Perplexity} &  $\textbf{MaxVio}_\text{global}$\\
+\midrule
+Loss-Controlled & 9.604 & 0.937 \\
+Loss-Free & \textbf{9.599} & \textbf{0.027} \\ 
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+    \includegraphics[width=0.7\linewidth]{figs/update_rate_violations_softmax_avg100step.pdf}
+\caption{For softmax gate, \ours{} maintains a superior load balance throughout most of the training process.}
+\label{fig:update_rate_violations_softmax_avg100step.pdf}
+\end{figure}
+
+
+\section{Future Token Leakage in Expert Choice}
+
+\subsection{Proof for Theoretical Leakage Amount}
+\label{app:ec_proof}
+Let $R = \frac{K}{N}$ denote the MoE sparsity. Here $K$ denotes the average number of experts activated per token, and $N$ is the total number of experts.
+For an MoE layer in Expert Choice, the maximum information leakage $I$ (in bits per token), i.e., the information that the combinations of routing allocation can carry is:
+\begin{equation}
+    \begin{aligned}
+    I = & \left. \log_2 \binom{\frac{KT}{N}}{T}^N \right/ T\\
+    > & N \left. \log_2 \frac{((1-\frac{K}{N})T)^{\frac{K}{N}T}}{(\frac{K}{N}T)^{\frac{K}{N}T}}\right/ T\\
+    =& K\log_2\frac{1-R}{R}.
+\end{aligned}
+\end{equation}
+For a model with a sparse ratio $R = \frac{2}{16}=0.125$ and 9 MoE layers, the total leakage information is more than 50 bits per token.
+
+
+
+\subsection{Experimental Evidence}
+\label{app:ec}
+We investigate the potential future token leakage of the Expert Choice by varying the chunk size used for experts' top-$k$ selection, ranging from 512 tokens to 8192 tokens.\footnote{A chunk size of 2048 tokens means performing top-$k$ selection inside a sentence, while 512 tokens correspond to a quarter of a sentence and 8192 tokens to four sentences.}  We train a 2B MoE model on 100B tokens. The results, shown in Table~\ref{fig:ec_leakage}, reveal two key findings: 
+
+\begin{enumerate}
+    \item  Using a small chunk size of 512 leads to an abnormal loss drop, which can be attributed to significant future token leakage. A smaller chunk size allows the model to more easily exploit information from future tokens within the chunk during training.
+    \item Shuffling tokens within a batch before chunking and selecting mitigates the observed loss drop. Such shuffling makes it more challenging for the model to utilize information leakage, as the future tokens are no longer in their original context. This finding supports the hypothesis that the loss drop originates from the model's accessing and exploiting future token information.
+\end{enumerate}
+
+% 1. Using a small chunk size of 512 leads to an abnormal loss drop, which can be attributed to significant future token leakage. A smaller chunk size allows the model to more easily exploit information from future tokens within the chunk during training.
+
+% 2. Shuffling tokens within a batch before chunking and selecting tokens eliminates the observed loss drop. This makes it more challenging for the model to utilize information leakage, as the future tokens are no longer in their original context. This finding supports the hypothesis that the loss drop originates from the model's ability to access and exploit future token information.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.8\linewidth]{figs/ec_leakage.pdf}
+\caption{Comparison of Expert Choice with different chunk sizes and shuffling. Expert Choice with a chunk size of 512 exhibits a significant loss drop compared to chunk sizes of 8192 or 2048. Shuffling tokens eliminates this loss drop, indicating the presence of future token leakage.}
+\label{fig:ec_leakage}
+\end{figure}
+
+\end{document}
+
+% validation set token数？ （当前72M）
+% 现在的叙述？
+% 4.1那里训练balance用relative?
+
+% 实验： 跑一下EC leak
