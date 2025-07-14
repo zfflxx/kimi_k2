@@ -50,4 +50,10 @@
 - 帮我深入理解矩阵范数这小节
   - [矩阵范数深度解析](muon_su_blog/matrix_norm_analysis.md)
   - 为什么矩阵的梯度可以用Frobenius内积表示?
-    - []
+
+### 读Muon is Scalable for LLM Training
+
+- @muon_scalable.note.md @muon_scalable.tex
+
+- 帮我概览的总结一下这篇论文
+  - [论文总结](/muon_su_blog/muon_scalable_summary.md)
